@@ -76,6 +76,31 @@ def sidebar_inputs() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# 분석 탭 최상단 — 지금 보고 있는 종목명·코드 (모바일 식별용)
+# ---------------------------------------------------------------------------
+def render_ticker_header(
+    resolved: str | None,
+    market: str,
+    currency: str,
+    demo: bool,
+) -> None:
+    """분석 페이지 맨 위에 '지금 분석 중인 종목'을 크게 표시한다."""
+    if demo or resolved is None:
+        st.header("🧪 데모 데이터 (예시 · 실제 시세 아님)")
+        return
+
+    # 대표 종목 유니버스에서 한글/표시명 조회(없으면 심볼만)
+    name = universe.KR_UNIVERSE.get(resolved) or universe.US_UNIVERSE.get(resolved)
+    flag = "🇰🇷" if currency == "KRW" else ("🇺🇸" if market == "US" else "🏳️")
+
+    if name:
+        st.header(f"{flag} {name} · {resolved}")
+    else:
+        st.header(f"{flag} {resolved}")
+    st.caption(f"{market} · {currency}")
+
+
+# ---------------------------------------------------------------------------
 # 상단 — 추세 판정 카드 + 종합 신호
 # ---------------------------------------------------------------------------
 def render_summary(
@@ -626,7 +651,7 @@ def main() -> None:
         st.warning("🧪 **데모 모드** — 아래는 합성 샘플 데이터이며 실제 시세가 아닙니다.")
         df = sample_data()
         # 데모는 합성 데이터이므로 시장/통화 라벨을 표기하지 않는다
-        market, currency = "DEMO", "-"
+        market, currency, resolved = "DEMO", "-", None
     else:
         if not cfg["ticker"]:
             st.info("왼쪽 사이드바에 티커를 입력하세요. (예: AAPL, 005930, 삼성전자)")
@@ -659,6 +684,7 @@ def main() -> None:
 
     # --- 분석 탭: 요약 + 차트 + 신호 + 오늘의 알림 ---
     with tab_analysis:
+        render_ticker_header(resolved, market, currency, cfg["demo"])
         render_trade_score(df)
         render_summary(df, cfg["windows"], currency=currency, market=market)
         # 알림은 단기/장기 이동평균 기준으로 판정 (사이드바 설정 재사용)
