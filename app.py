@@ -15,7 +15,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
-from src import indicators, levels, signals
+from src import alerts, indicators, levels, signals
 from src.data import VALID_INTERVALS, VALID_PERIODS, fetch_ohlcv, sample_data
 from src.trend import classify_trend, detect_crosses
 
@@ -240,6 +240,33 @@ def render_signal_table(df: pd.DataFrame) -> None:
 
 
 # ---------------------------------------------------------------------------
+# 오늘의 알림 (매매 신호 알림)
+# ---------------------------------------------------------------------------
+def render_alerts(df: pd.DataFrame, ticker: str, windows: tuple[int, int]) -> None:
+    """최신 봉 기준으로 오늘 트리거된 기술적 조건을 알림 섹션으로 표시한다."""
+    st.subheader("🔔 오늘의 알림")
+    today_alerts = alerts.check_alerts(df, ticker, windows=windows)
+
+    if not today_alerts:
+        st.info("오늘 트리거된 알림이 없습니다.")
+    else:
+        # 중요도 high는 강조 톤(warning), 그 외는 info 톤으로 개별 표시
+        for a in today_alerts:
+            if a.severity == "high":
+                st.warning(f"{a.emoji} {a.message}")
+            else:
+                st.info(f"{a.emoji} {a.message}")
+        # 요약 표(종류/방향/중요도/내용)
+        st.dataframe(
+            alerts.alerts_dataframe(today_alerts),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    st.caption("※ 오늘의 알림은 기술적 조건 탐지 결과로 참고용이며, 매매 지시가 아닙니다.")
+
+
+# ---------------------------------------------------------------------------
 # 메인
 # ---------------------------------------------------------------------------
 def main() -> None:
@@ -270,9 +297,23 @@ def main() -> None:
         st.warning("표시할 데이터가 충분하지 않습니다. 기간을 늘려보세요.")
         return
 
-    render_summary(df, cfg["windows"])
-    render_chart(df, cfg)
-    render_signal_table(df)
+    tab_analysis, tab_screener, tab_backtest = st.tabs(["분석", "스크리너", "백테스트"])
+
+    # --- 분석 탭: 요약 + 차트 + 신호 + 오늘의 알림 ---
+    with tab_analysis:
+        render_summary(df, cfg["windows"])
+        # 알림은 단기/장기 이동평균 기준으로 판정 (사이드바 설정 재사용)
+        render_alerts(df, cfg["ticker"] or "DEMO", (cfg["windows"][0], cfg["windows"][1]))
+        render_chart(df, cfg)
+        render_signal_table(df)
+
+    # --- 스크리너 탭: 향후 check_watchlist 기반 기능으로 채울 예정 ---
+    with tab_screener:
+        st.info("🛠️ 스크리너는 준비 중입니다. (워치리스트 일괄 알림 점검 예정)")
+
+    # --- 백테스트 탭: 향후 기능 ---
+    with tab_backtest:
+        st.info("🛠️ 백테스트는 준비 중입니다.")
 
     st.divider()
     st.caption(
