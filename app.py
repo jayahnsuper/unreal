@@ -15,7 +15,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
-from src import alerts, indicators, levels, signals
+from src import alerts, backtest, indicators, levels, signals
 from src.data import VALID_INTERVALS, VALID_PERIODS, fetch_ohlcv, sample_data
 from src.trend import classify_trend, detect_crosses
 
@@ -267,6 +267,97 @@ def render_alerts(df: pd.DataFrame, ticker: str, windows: tuple[int, int]) -> No
 
 
 # ---------------------------------------------------------------------------
+# 백테스트
+# ---------------------------------------------------------------------------
+def build_backtest_chart(
+    result: backtest.BacktestResult,
+    buy_hold: pd.Series | None = None,
+) -> go.Figure:
+    """백테스트 자산곡선 Figure를 만든다 (Streamlit 런타임 불필요, 테스트 가능).
+
+    build_chart의 go.Scatter 색상/레이아웃 패턴을 재사용하며, 바이앤홀드 곡선을
+    회색 점선 비교선으로 함께 표시한다.
+    """
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=result.equity_curve.index,
+            y=result.equity_curve,
+            name="전략 자산",
+            line=dict(width=1.6, color="#e0453e"),  # build_chart 상승색(빨강) 재사용
+        )
+    )
+    if buy_hold is not None:
+        fig.add_trace(
+            go.Scatter(
+                x=buy_hold.index,
+                y=buy_hold,
+                name="바이앤홀드",
+                line=dict(width=1.2, color="rgba(150,150,150,0.8)", dash="dot"),
+            )
+        )
+    fig.update_layout(
+        height=420,
+        legend=dict(orientation="h", y=1.02, yanchor="bottom"),
+        margin=dict(l=10, r=10, t=30, b=10),
+        hovermode="x unified",
+        yaxis_title="자산(초기=1.0)",
+    )
+    return fig
+
+
+def render_backtest(df: pd.DataFrame, cfg: dict) -> None:
+    """백테스트 탭 UI — 전략 선택, 자산곡선, 지표 표, 거래 상세."""
+    st.subheader("🔁 신호 기반 백테스트 (롱-온리)")
+
+    label_map = {"골든크로스": "golden_cross", "RSI 과매도/과매수": "rsi"}
+    strat_label = st.selectbox("전략", list(label_map.keys()))
+    strategy = label_map[strat_label]
+
+    # 골든크로스는 사이드바 이동평균 설정(단기/장기)을 그대로 재사용
+    short, long = cfg["windows"][0], cfg["windows"][1]
+    if strategy == "golden_cross":
+        st.caption(f"단기 {short}일 · 장기 {long}일 이동평균 교차 기준")
+
+    result = backtest.run_backtest(df, strategy, short=short, long=long)
+
+    # 바이앤홀드 비교 곡선(첫 유효종가 기준 정규화)
+    close = df["Close"].astype("float64")
+    valid = close.dropna()
+    buy_hold = close / float(valid.iloc[0]) if len(valid) else None
+
+    st.plotly_chart(
+        build_backtest_chart(result, buy_hold),
+        use_container_width=True,
+    )
+
+    st.dataframe(
+        backtest.summary_dataframe(result),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    with st.expander(f"거래 상세 ({result.num_trades}건)"):
+        if result.trades:
+            trades_df = pd.DataFrame(result.trades)
+            trades_df = trades_df.rename(
+                columns={
+                    "entry_date": "진입일",
+                    "entry_price": "진입가",
+                    "exit_date": "청산일",
+                    "exit_price": "청산가",
+                    "return_pct": "수익률",
+                }
+            )
+            trades_df["수익률"] = trades_df["수익률"].map(lambda v: f"{v * 100:+.2f}%")
+            st.dataframe(trades_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("체결된 거래가 없습니다. (신호 미발생 또는 데이터 부족)")
+
+    st.caption("※ 과거 성과는 미래 수익을 보장하지 않으며 참고용이고 매매 지시가 아닙니다.")
+
+
+# ---------------------------------------------------------------------------
 # 메인
 # ---------------------------------------------------------------------------
 def main() -> None:
@@ -311,9 +402,9 @@ def main() -> None:
     with tab_screener:
         st.info("🛠️ 스크리너는 준비 중입니다. (워치리스트 일괄 알림 점검 예정)")
 
-    # --- 백테스트 탭: 향후 기능 ---
+    # --- 백테스트 탭: 신호 기반 롱-온리 시뮬레이션 ---
     with tab_backtest:
-        st.info("🛠️ 백테스트는 준비 중입니다.")
+        render_backtest(df, cfg)
 
     st.divider()
     st.caption(
