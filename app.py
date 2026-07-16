@@ -16,7 +16,14 @@ import streamlit as st
 from plotly.subplots import make_subplots
 
 from src import alerts, backtest, indicators, levels, screener, signals
-from src.data import VALID_INTERVALS, VALID_PERIODS, fetch_ohlcv, sample_data
+from src.data import (
+    VALID_INTERVALS,
+    VALID_PERIODS,
+    fetch_ohlcv,
+    market_label,
+    resolve_ticker,
+    sample_data,
+)
 from src.trend import classify_trend, detect_crosses
 
 st.set_page_config(page_title="주식 추세 분석기", page_icon="📈", layout="wide")
@@ -30,7 +37,10 @@ def sidebar_inputs() -> dict:
     ticker = st.sidebar.text_input(
         "티커 / 종목코드",
         value="AAPL",
-        help="예) AAPL, TSLA, NVDA · 한국: 005930 또는 005930.KS, 코스닥 035720.KQ",
+        help=(
+            "예) AAPL, TSLA, NVDA · 한국: 005930 또는 005930.KS, 코스닥 035720.KQ · "
+            "한글 종목명(예: 삼성전자, 카카오)도 인식"
+        ),
     ).strip()
 
     period = st.sidebar.selectbox("기간", VALID_PERIODS, index=VALID_PERIODS.index("1y"))
@@ -68,7 +78,12 @@ def sidebar_inputs() -> dict:
 # ---------------------------------------------------------------------------
 # 상단 — 추세 판정 카드 + 종합 신호
 # ---------------------------------------------------------------------------
-def render_summary(df: pd.DataFrame, windows: tuple[int, ...]) -> None:
+def render_summary(
+    df: pd.DataFrame,
+    windows: tuple[int, ...],
+    currency: str = "USD",
+    market: str = "US",
+) -> None:
     trend = classify_trend(df, windows=windows)
     report = signals.evaluate(df)
 
@@ -77,9 +92,19 @@ def render_summary(df: pd.DataFrame, windows: tuple[int, ...]) -> None:
     change = price - prev
     change_pct = (change / prev * 100) if prev else 0.0
 
+    # 통화별 가격 포맷: KRW는 원화 기호·정수, 그 외(USD 등)는 소수 2자리
+    if currency == "KRW":
+        price_str = f"₩{price:,.0f}"
+        change_str = f"{change:+,.0f} ({change_pct:+.2f}%)"
+    else:
+        price_str = f"${price:,.2f}"
+        change_str = f"{change:+,.2f} ({change_pct:+.2f}%)"
+
     c1, c2, c3 = st.columns([1.1, 1.1, 1.4])
     with c1:
-        st.metric("현재가", f"{price:,.2f}", f"{change:+,.2f} ({change_pct:+.2f}%)")
+        st.metric("현재가", price_str, change_str)
+        # 시장/통화 배지 (예: 'KOSPI · KRW', 'US · USD', 데모는 'DEMO · -')
+        st.caption(f"{market} · {currency}")
     with c2:
         st.metric(
             f"추세 판정 {trend.emoji}",
@@ -465,13 +490,22 @@ def main() -> None:
     if cfg["demo"]:
         st.warning("🧪 **데모 모드** — 아래는 합성 샘플 데이터이며 실제 시세가 아닙니다.")
         df = sample_data()
+        # 데모는 합성 데이터이므로 시장/통화 라벨을 표기하지 않는다
+        market, currency = "DEMO", "-"
     else:
         if not cfg["ticker"]:
-            st.info("왼쪽 사이드바에 티커를 입력하세요. (예: AAPL, 005930)")
+            st.info("왼쪽 사이드바에 티커를 입력하세요. (예: AAPL, 005930, 삼성전자)")
             return
+        # 입력(한글명/코드/일반티커)을 야후 심볼로 정규화하고 시장·통화 라벨 획득
         try:
-            with st.spinner(f"{cfg['ticker']} 데이터를 불러오는 중…"):
-                df = fetch_ohlcv(cfg["ticker"], cfg["period"], cfg["interval"])
+            resolved = resolve_ticker(cfg["ticker"])
+        except ValueError as exc:
+            st.info(str(exc))
+            return
+        market, currency = market_label(resolved)
+        try:
+            with st.spinner(f"{cfg['ticker']} ({resolved}) 데이터를 불러오는 중…"):
+                df = fetch_ohlcv(resolved, cfg["period"], cfg["interval"])
         except Exception as exc:  # noqa: BLE001 - 사용자에게 원인 표시
             st.error(f"데이터를 불러오지 못했습니다: {exc}")
             st.info(
@@ -488,7 +522,7 @@ def main() -> None:
 
     # --- 분석 탭: 요약 + 차트 + 신호 + 오늘의 알림 ---
     with tab_analysis:
-        render_summary(df, cfg["windows"])
+        render_summary(df, cfg["windows"], currency=currency, market=market)
         # 알림은 단기/장기 이동평균 기준으로 판정 (사이드바 설정 재사용)
         render_alerts(df, cfg["ticker"] or "DEMO", (cfg["windows"][0], cfg["windows"][1]))
         render_chart(df, cfg)

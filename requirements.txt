@@ -4,5 +4,9 @@ pandas>=2.0
 numpy>=1.24
 plotly>=5.20
 
+# 선택 의존성(대체 데이터 소스) — 미설치여도 앱은 정상 동작(try-except 지연 import).
+# yfinance 조회가 막힌 환경에서 국내 종목 보조 조회용. 사용 시 주석 해제.
+# FinanceDataReader>=0.9.50
+
 # dev/test
 pytest>=8.0
