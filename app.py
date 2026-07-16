@@ -252,6 +252,54 @@ def render_chart(df: pd.DataFrame, cfg: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# 매매 점수 (0~100 게이지)
+# ---------------------------------------------------------------------------
+def build_score_gauge(ts: signals.TradeScore) -> go.Figure:
+    """0~100 매매 점수를 게이지로 그린다 (Streamlit 런타임 불필요, 테스트 가능)."""
+    fig = go.Figure(
+        go.Indicator(
+            mode="gauge+number",
+            value=ts.score,
+            number={"suffix": " 점", "font": {"size": 40}},
+            title={"text": f"매매 점수 {ts.emoji} <b>{ts.label}</b>"},
+            gauge={
+                "axis": {"range": [0, 100], "tickvals": [0, 25, 50, 75, 100]},
+                "bar": {"color": "rgba(40,40,40,0.85)"},
+                "steps": [
+                    {"range": [0, 25], "color": "#c0392b"},   # 강한 매도
+                    {"range": [25, 40], "color": "#e88f88"},  # 매도
+                    {"range": [40, 60], "color": "#f2e2a8"},  # 중립
+                    {"range": [60, 75], "color": "#8fc0e8"},  # 매수
+                    {"range": [75, 100], "color": "#1f6fe0"}, # 강한 매수
+                ],
+                "threshold": {
+                    "line": {"color": "black", "width": 3},
+                    "thickness": 0.8,
+                    "value": ts.score,
+                },
+            },
+        )
+    )
+    fig.update_layout(height=260, margin=dict(l=20, r=20, t=60, b=10))
+    return fig
+
+
+def render_trade_score(df: pd.DataFrame) -> None:
+    """분석 탭 상단의 한눈 매매 점수 섹션."""
+    ts = signals.trade_score(df)
+    c1, c2 = st.columns([1.4, 1])
+    with c1:
+        st.plotly_chart(build_score_gauge(ts), use_container_width=True)
+    with c2:
+        st.metric(f"종합 판단 {ts.emoji}", ts.label, f"{ts.score}/100")
+        st.caption(
+            "0=강한 매도 · 50=중립 · 100=강한 매수. "
+            "추세(55%)와 규칙 신호(45%)를 합친 참고 점수입니다."
+        )
+        st.caption("※ 개인 참고용이며 매매 지시·수익 보장이 아닙니다.")
+
+
+# ---------------------------------------------------------------------------
 # 신호 테이블
 # ---------------------------------------------------------------------------
 def render_signal_table(df: pd.DataFrame) -> None:
@@ -522,6 +570,7 @@ def main() -> None:
 
     # --- 분석 탭: 요약 + 차트 + 신호 + 오늘의 알림 ---
     with tab_analysis:
+        render_trade_score(df)
         render_summary(df, cfg["windows"], currency=currency, market=market)
         # 알림은 단기/장기 이동평균 기준으로 판정 (사이드바 설정 재사용)
         render_alerts(df, cfg["ticker"] or "DEMO", (cfg["windows"][0], cfg["windows"][1]))

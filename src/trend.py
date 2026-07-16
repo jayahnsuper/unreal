@@ -75,6 +75,18 @@ def classify_trend(
     close = df["Close"].astype("float64")
     n = len(close)
     usable = _fit_windows(n, windows)
+    shortened = False
+
+    if len(usable) < 2:
+        # 표준 이평(20/60/120)이 안 들어갈 만큼 데이터가 짧으면,
+        # 데이터 길이에 맞춘 축소 이평으로 판정한다(그래도 부족하면 '데이터 부족').
+        # 예: 21봉 -> (3, 7), 40봉 -> (5, 13). 짧은 만큼 신뢰도는 낮게 표기.
+        if n >= 8:
+            short = max(3, n // 8)
+            long = max(short + 2, n // 3)
+            if long < n:
+                usable = (short, long)
+                shortened = True
 
     if len(usable) < 2:
         return TrendResult(
@@ -82,8 +94,8 @@ def classify_trend(
             score=0.0,
             confidence=0,
             reasons=[
-                f"판정에 필요한 데이터가 부족합니다 (현재 {n}봉). "
-                f"기간을 늘리거나 더 오래된 종목을 선택하세요."
+                f"판정에 필요한 데이터가 부족합니다 (현재 {n}봉, 최소 8봉 필요). "
+                f"기간(period)을 늘리거나 주기를 일봉으로 바꿔보세요."
             ],
             windows=usable,
         )
@@ -149,6 +161,14 @@ def classify_trend(
         label = "횡보"
         # 0에 가까울수록 횡보 신뢰도가 높다
         confidence = int(round((1 - abs(score) / 0.25) * 100))
+
+    if shortened:
+        # 데이터가 짧아 축소 이평으로 판정한 경우: 신뢰도를 낮추고 안내 문구 추가
+        confidence = int(round(confidence * 0.7))
+        reasons.append(
+            f"⚠️ 데이터가 짧아({n}봉) 표준 이평 대신 축소 이평({usable[0]}·{usable[1]}봉)으로 "
+            f"판정했습니다. 기간을 늘리면 더 정확합니다."
+        )
 
     return TrendResult(
         label=label,

@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 import pandas as pd
 
 from . import indicators
-from .trend import detect_crosses
+from .trend import classify_trend, detect_crosses
 
 
 @dataclass
@@ -27,6 +27,63 @@ class SignalReport:
     @property
     def emoji(self) -> str:
         return {"매수 관심": "🟢", "매도 관심": "🔴"}.get(self.stance, "🟡")
+
+
+@dataclass
+class TradeScore:
+    """추세 + 규칙 신호를 합친 한눈 매매 점수(0~100)."""
+
+    score: int  # 0(강한 매도) ~ 50(중립) ~ 100(강한 매수)
+    label: str  # "강한 매수" | "매수" | "중립" | "매도" | "강한 매도"
+    trend_score: float  # 추세 점수 -1..+1 (참고용)
+    signal_score: int  # 규칙 점수 합계 (참고용)
+
+    @property
+    def emoji(self) -> str:
+        return {
+            "강한 매수": "🟢",
+            "매수": "🟢",
+            "매도": "🔴",
+            "강한 매도": "🔴",
+        }.get(self.label, "🟡")
+
+
+def trade_score(df: pd.DataFrame) -> TradeScore:
+    """0~100 매매 점수를 계산한다.
+
+    추세 판정 점수(-1..+1, 가중 0.55)와 규칙 신호 점수(정규화 -1..+1, 가중 0.45)를
+    합쳐 50(중립)을 기준으로 0~100 척도로 환산한다. 높을수록 매수 우위.
+
+    ⚠️ 참고용 개인 도구다. 매매 지시나 수익 보장이 아니다.
+    """
+    trend = classify_trend(df)
+    report = evaluate(df)
+
+    # 규칙 점수를 규칙 개수로 나눠 -1..+1 로 정규화
+    n_rules = len(report.rows) or 1
+    signal_norm = report.score / n_rules
+
+    combined = 0.55 * trend.score + 0.45 * signal_norm  # -1..+1
+    score = int(round(50 + combined * 50))
+    score = max(0, min(100, score))
+
+    if score >= 75:
+        label = "강한 매수"
+    elif score >= 60:
+        label = "매수"
+    elif score > 40:
+        label = "중립"
+    elif score > 25:
+        label = "매도"
+    else:
+        label = "강한 매도"
+
+    return TradeScore(
+        score=score,
+        label=label,
+        trend_score=trend.score,
+        signal_score=report.score,
+    )
 
 
 def _verdict_label(v: int) -> str:
