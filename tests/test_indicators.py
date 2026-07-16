@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 
 from src import indicators, levels, signals
-from src.data import normalize_ticker, sample_data
+from src.data import _select_and_clean, normalize_ticker, sample_data
 from src.trend import classify_trend, detect_crosses
 
 
@@ -243,6 +243,16 @@ def test_normalize_ticker_korean_code_gets_ks_suffix():
     assert normalize_ticker("005930") == "005930.KS"
     assert normalize_ticker(" aapl ") == "AAPL"
     assert normalize_ticker("035720.KQ") == "035720.KQ"
+
+
+def test_select_and_clean_drops_trailing_nan_close():
+    # yfinance가 마지막 봉 종가를 NaN으로 주는 상황을 재현 → 그 행이 제거돼야 한다
+    df = _ohlcv_from_close(list(np.linspace(100, 120, 30)))
+    df = df.copy()
+    df.iloc[-1, df.columns.get_loc("Close")] = np.nan  # 마지막 종가 NaN
+    cleaned = _select_and_clean(df)
+    assert len(cleaned) == len(df) - 1
+    assert not np.isnan(float(cleaned["Close"].iloc[-1]))  # 현재가가 유효
 
 
 def test_sample_data_shape_and_columns():
