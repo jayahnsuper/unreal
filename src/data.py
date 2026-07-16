@@ -222,9 +222,24 @@ def fetch_ohlcv(
     if missing:
         raise ValueError(f"필수 컬럼 누락: {missing}")
 
-    df = df[_REQUIRED_COLS].dropna(how="all")
-    df.index.name = "Date"
+    df = _select_and_clean(df)
+    if df.empty:
+        raise ValueError(
+            f"'{ticker}' 유효한 종가 데이터가 없습니다. 티커/기간을 확인하세요."
+        )
     return df
+
+
+def _select_and_clean(df: pd.DataFrame) -> pd.DataFrame:
+    """필수 컬럼만 남기고 **종가(Close)가 비어있는 행을 제거**한다.
+
+    yfinance는 최신 봉(장중/미체결분)의 종가를 NaN으로 돌려줄 때가 있는데,
+    그 행이 마지막이면 '현재가'가 NaN으로 표시되는 문제가 생긴다. 여기서
+    종가 NaN 행을 걸러 마지막 행이 항상 유효한 종가를 갖도록 보장한다.
+    """
+    out = df[_REQUIRED_COLS].dropna(subset=["Close"])
+    out.index.name = "Date"
+    return out
 
 
 def _fetch_via_fdr(

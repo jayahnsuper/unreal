@@ -112,8 +112,14 @@ def render_summary(
     trend = classify_trend(df, windows=windows)
     report = signals.evaluate(df)
 
-    price = float(df["Close"].iloc[-1])
-    prev = float(df["Close"].iloc[-2]) if len(df) >= 2 else price
+    # 마지막 '유효한' 종가를 현재가로 사용(트레일링 NaN 봉 방어)
+    valid_close = df["Close"].astype("float64").dropna()
+    if valid_close.empty:
+        st.metric("현재가", "-")
+        st.caption("유효한 종가 데이터가 없습니다.")
+        return
+    price = float(valid_close.iloc[-1])
+    prev = float(valid_close.iloc[-2]) if len(valid_close) >= 2 else price
     change = price - prev
     change_pct = (change / prev * 100) if prev else 0.0
 
@@ -128,8 +134,6 @@ def render_summary(
     c1, c2, c3 = st.columns([1.1, 1.1, 1.4])
     with c1:
         st.metric("현재가", price_str, change_str)
-        # 시장/통화 배지 (예: 'KOSPI · KRW', 'US · USD', 데모는 'DEMO · -')
-        st.caption(f"{market} · {currency}")
     with c2:
         st.metric(
             f"추세 판정 {trend.emoji}",
