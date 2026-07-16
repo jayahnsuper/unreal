@@ -48,6 +48,118 @@ class TradeScore:
         }.get(self.label, "🟡")
 
 
+@dataclass
+class SellTiming:
+    """보유 포지션의 매도 타이밍 판정(단타 보조)."""
+
+    urgency: int  # 0(보유 지속) ~ 100(즉시 매도 고려)
+    action: str  # "매도 고려" | "관망" | "보유 지속"
+    reasons: list[str] = field(default_factory=list)
+    stop_loss: float | None = None  # 매수단가 기준 ATR 손절가(입력 시)
+    trailing_stop: float | None = None  # 최근 고점 - 2·ATR (추적 손절)
+    target: float | None = None  # 가장 가까운 저항(목표가 참고)
+
+    @property
+    def emoji(self) -> str:
+        return {"매도 고려": "🔴", "관망": "🟡"}.get(self.action, "🟢")
+
+
+def sell_timing(
+    df: pd.DataFrame,
+    entry_price: float | None = None,
+    windows: tuple[int, int] = (20, 60),
+) -> SellTiming:
+    """보유 중인 종목의 매도 타이밍을 판정한다(단타 보조 · 참고용).
+
+    과매수(RSI)·데드크로스·MACD 하락전환·볼린저 상단 이탈·저항 근접을 점수화하고,
+    ATR 기반 손절가/추적 손절가와 가장 가까운 저항(목표가)을 제안한다.
+
+    ⚠️ 참고용이며 매매 지시가 아니다. 손절/목표가는 계산 예시일 뿐이다.
+    """
+    from .levels import support_resistance
+    from .trend import detect_crosses
+
+    close = df["Close"].astype("float64")
+    price = float(close.iloc[-1])
+    reasons: list[str] = []
+    score = 0
+
+    # --- RSI 과매수 ---
+    r = indicators.rsi(close, 14).dropna()
+    if len(r):
+        rv = float(r.iloc[-1])
+        if rv >= 70:
+            score += 25
+            reasons.append(f"RSI {rv:.0f} — 과매수권(차익실현 고려)")
+
+    # --- 데드크로스(최근 5봉 이내) ---
+    try:
+        crosses = detect_crosses(df, short=windows[0], long=windows[1])
+        if not crosses.empty and crosses["type"].iloc[-1] == "dead":
+            pos = df.index.get_loc(crosses.index[-1])
+            if (len(df) - 1) - int(pos) <= 5:
+                score += 30
+                reasons.append("최근 데드크로스 발생 — 단기 하락 전환 신호")
+    except Exception:  # noqa: BLE001 - 개별 계산 실패는 무시
+        pass
+
+    # --- MACD 하락 전환 ---
+    hist = indicators.macd(close)["hist"].dropna()
+    if len(hist) >= 2:
+        cur, prev = float(hist.iloc[-1]), float(hist.iloc[-2])
+        if prev >= 0 > cur:
+            score += 25
+            reasons.append("MACD가 시그널선을 하향 돌파(하락 모멘텀 전환)")
+        elif cur < 0:
+            score += 10
+            reasons.append("MACD가 시그널선 아래(하락 모멘텀)")
+
+    # --- 볼린저 상단 이탈(과열) ---
+    bb = indicators.bollinger(close, 20, 2.0)
+    if bb["upper"].notna().any():
+        upper = float(bb["upper"].dropna().iloc[-1])
+        if price > upper:
+            score += 15
+            reasons.append("볼린저 상단 이탈 — 단기 과열")
+
+    # --- 저항 근접 ---
+    levels = support_resistance(df)
+    resistances = [r for r in levels.get("resistances", []) if r >= price]
+    target = min(resistances) if resistances else None
+    if target is not None and (target - price) / price <= 0.01:
+        score += 10
+        reasons.append(f"저항선({target:,.2f}) 근접 — 돌파 실패 시 매도 압력")
+
+    # --- ATR 기반 손절/추적 손절 ---
+    atr_series = indicators.atr(df, 14).dropna()
+    stop_loss = trailing_stop = None
+    if len(atr_series):
+        atr_val = float(atr_series.iloc[-1])
+        recent_high = float(df["High"].astype("float64").tail(10).max())
+        trailing_stop = recent_high - 2.0 * atr_val
+        if entry_price is not None and entry_price > 0:
+            stop_loss = entry_price - 1.5 * atr_val
+
+    urgency = min(100, score)
+    if urgency >= 55:
+        action = "매도 고려"
+    elif urgency >= 30:
+        action = "관망"
+    else:
+        action = "보유 지속"
+        if not reasons:
+            reasons.append("뚜렷한 매도 신호가 없습니다 (추세·모멘텀 유지)")
+
+    return SellTiming(
+        urgency=urgency,
+        action=action,
+        reasons=reasons,
+        stop_loss=stop_loss,
+        trailing_stop=trailing_stop,
+        target=target,
+    )
+
+
 def trade_score(df: pd.DataFrame) -> TradeScore:
     """0~100 매매 점수를 계산한다.
 
