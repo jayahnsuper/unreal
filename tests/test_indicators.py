@@ -193,6 +193,40 @@ def test_trade_score_sideways_is_neutral():
     assert ts.label == "중립"
 
 
+# --------------------------- Sell timing -------------------------------
+def test_sell_timing_structure_and_bounds():
+    df = _ohlcv_from_close(list(np.linspace(100, 200, 160)))
+    stiming = signals.sell_timing(df)
+    assert 0 <= stiming.urgency <= 100
+    assert stiming.action in {"매도 고려", "관망", "보유 지속"}
+    # 최근 고점 기반 추적 손절가는 현재가보다 낮아야 한다
+    assert stiming.trailing_stop is None or stiming.trailing_stop < float(df["Close"].iloc[-1])
+
+
+def test_sell_timing_stop_loss_from_entry():
+    df = _ohlcv_from_close(list(np.linspace(100, 200, 160)))
+    stiming = signals.sell_timing(df, entry_price=190.0)
+    # 매수단가 입력 시 손절가 = 매수단가 - 1.5·ATR < 매수단가
+    assert stiming.stop_loss is not None
+    assert stiming.stop_loss < 190.0
+
+
+def test_sell_timing_overbought_flags_sell():
+    # 강한 상승 지속 → RSI 과매수 → 차익실현(매도) 신호가 잡혀야 한다
+    up = _ohlcv_from_close(list(np.linspace(100, 220, 160)))
+    stiming = signals.sell_timing(up)
+    assert stiming.urgency >= 25
+    assert any(("과매수" in r) or ("RSI" in r) for r in stiming.reasons)
+
+
+def test_sell_timing_calm_hold():
+    # 잔잔한 횡보 → 뚜렷한 매도 신호 없음 → 보유 지속 쪽
+    rng = np.random.default_rng(11)
+    flat = _ohlcv_from_close(list(150 + rng.normal(scale=0.4, size=160)))
+    stiming = signals.sell_timing(flat)
+    assert stiming.action in {"보유 지속", "관망"}
+
+
 # --------------------------- Levels ------------------------------------
 def test_support_resistance_split_around_price():
     rng = np.random.default_rng(5)

@@ -313,6 +313,41 @@ def render_signal_table(df: pd.DataFrame) -> None:
 
 
 # ---------------------------------------------------------------------------
+# 매도 타이밍 (단타 보조)
+# ---------------------------------------------------------------------------
+def render_sell_timing(df: pd.DataFrame, currency: str = "USD") -> None:
+    """보유 중이라면 언제 팔지 — 매도 타이밍 판정 + 손절/목표가 제안."""
+    st.subheader("📉 매도 타이밍 (보유 중이라면)")
+
+    fmt = (lambda v: f"₩{v:,.0f}") if currency == "KRW" else (lambda v: f"{v:,.2f}")
+
+    entry = st.number_input(
+        "내 매수단가 (선택 · 0이면 미입력)",
+        min_value=0.0, value=0.0, step=1.0,
+        help="입력하면 매수단가 기준 ATR 손절가를 계산합니다.",
+    )
+    entry_price = float(entry) if entry > 0 else None
+
+    stiming = signals.sell_timing(df, entry_price=entry_price)
+
+    c1, c2 = st.columns([1, 2])
+    with c1:
+        st.metric(f"매도 판단 {stiming.emoji}", stiming.action, f"강도 {stiming.urgency}/100")
+    with c2:
+        if stiming.trailing_stop is not None:
+            st.markdown(f"- 🧷 **추적 손절**(최근고점−2·ATR): `{fmt(stiming.trailing_stop)}`")
+        if stiming.stop_loss is not None:
+            st.markdown(f"- 🛑 **손절가**(매수단가−1.5·ATR): `{fmt(stiming.stop_loss)}`")
+        if stiming.target is not None:
+            st.markdown(f"- 🎯 **목표가**(가까운 저항): `{fmt(stiming.target)}`")
+
+    for reason in stiming.reasons:
+        st.markdown(f"- {reason}")
+
+    st.caption("※ 매도 타이밍·손절/목표가는 기술적 계산 예시로 참고용이며 매매 지시가 아닙니다.")
+
+
+# ---------------------------------------------------------------------------
 # 오늘의 알림 (매매 신호 알림)
 # ---------------------------------------------------------------------------
 def render_alerts(df: pd.DataFrame, ticker: str, windows: tuple[int, int]) -> None:
@@ -630,6 +665,7 @@ def main() -> None:
         render_alerts(df, cfg["ticker"] or "DEMO", (cfg["windows"][0], cfg["windows"][1]))
         render_chart(df, cfg)
         render_signal_table(df)
+        render_sell_timing(df, currency=currency)
 
     # --- 추천 탭: 대표주 자동 스캔 → 매매 점수 상위 ---
     with tab_recommend:
