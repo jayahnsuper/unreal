@@ -15,7 +15,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
-from src import alerts, backtest, indicators, levels, screener, signals
+from src import alerts, backtest, indicators, levels, screener, signals, universe
 from src.data import (
     VALID_INTERVALS,
     VALID_PERIODS,
@@ -527,6 +527,58 @@ def render_screener(cfg: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# 추천 (대표 종목 자동 스캔 → 매매 점수 상위)
+# ---------------------------------------------------------------------------
+def render_recommend(cfg: dict) -> None:
+    """추천 탭 — 한국·미국 대표주를 스캔해 매매 점수 상위 종목을 표로 보여준다."""
+    st.subheader("🎯 오늘의 매수 후보 추천")
+    st.caption(
+        "대표 종목을 자동으로 훑어 **매매 점수 높은 순**으로 한국·미국 각 10개를 뽑습니다. "
+        "종목 추천/보증이 아니라 기술적 점수 순 정렬입니다."
+    )
+
+    min_score = st.slider("최소 매매 점수 (이 점수 이상만)", 50, 90, 60, step=5)
+
+    if cfg["demo"]:
+        st.warning(
+            "🧪 **데모 모드** — 추천 결과는 합성 샘플 데이터 기반이며 실제 시세가 아닙니다. "
+            "진짜 추천은 실시간 데이터가 되는 환경(내 링크/PC)에서 실행하세요."
+        )
+
+    if st.button("추천 종목 스캔"):
+        fetch = make_demo_fetch() if cfg["demo"] else None
+        c_kr, c_us = st.columns(2)
+
+        with c_kr:
+            st.markdown("### 🇰🇷 한국 Top 10")
+            with st.spinner("한국 대표주 스캔 중… (실시간은 다소 걸릴 수 있어요)"):
+                kr = screener.recommend(
+                    universe.KR_UNIVERSE, top_n=10, fetch=fetch,
+                    period=cfg["period"], interval=cfg["interval"],
+                    windows=cfg["windows"], min_score=min_score,
+                )
+            if kr.empty:
+                st.info("조건(매수 점수 이상)을 만족하는 종목이 없습니다.")
+            else:
+                st.dataframe(kr, use_container_width=True, hide_index=True)
+
+        with c_us:
+            st.markdown("### 🇺🇸 미국 Top 10")
+            with st.spinner("미국 대표주 스캔 중…"):
+                us = screener.recommend(
+                    universe.US_UNIVERSE, top_n=10, fetch=fetch,
+                    period=cfg["period"], interval=cfg["interval"],
+                    windows=cfg["windows"], min_score=min_score,
+                )
+            if us.empty:
+                st.info("조건(매수 점수 이상)을 만족하는 종목이 없습니다.")
+            else:
+                st.dataframe(us, use_container_width=True, hide_index=True)
+
+    st.caption("※ 참고용 개인 도구입니다. 매매 지시·수익 보장이 아니며 투자 책임은 본인에게 있습니다.")
+
+
+# ---------------------------------------------------------------------------
 # 메인
 # ---------------------------------------------------------------------------
 def main() -> None:
@@ -566,7 +618,9 @@ def main() -> None:
         st.warning("표시할 데이터가 충분하지 않습니다. 기간을 늘려보세요.")
         return
 
-    tab_analysis, tab_screener, tab_backtest = st.tabs(["분석", "스크리너", "백테스트"])
+    tab_analysis, tab_recommend, tab_screener, tab_backtest = st.tabs(
+        ["분석", "추천", "스크리너", "백테스트"]
+    )
 
     # --- 분석 탭: 요약 + 차트 + 신호 + 오늘의 알림 ---
     with tab_analysis:
@@ -576,6 +630,10 @@ def main() -> None:
         render_alerts(df, cfg["ticker"] or "DEMO", (cfg["windows"][0], cfg["windows"][1]))
         render_chart(df, cfg)
         render_signal_table(df)
+
+    # --- 추천 탭: 대표주 자동 스캔 → 매매 점수 상위 ---
+    with tab_recommend:
+        render_recommend(cfg)
 
     # --- 스크리너 탭: 여러 종목 일괄 조회·필터·랭킹 ---
     with tab_screener:

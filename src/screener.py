@@ -240,3 +240,71 @@ def screen(
         # mergesort: 동점일 때 입력 순서를 보존(안정 정렬)
         result = result.sort_values(sort_by, ascending=False, kind="mergesort")
     return result.reset_index(drop=True)
+
+
+# 추천 결과 표의 고정 컬럼
+RECOMMEND_COLUMNS: tuple[str, ...] = ("종목", "티커", "매매점수", "판단", "추세", "RSI")
+
+
+def recommend(
+    universe: dict[str, str],
+    top_n: int = 10,
+    fetch: Callable[..., pd.DataFrame] | None = None,
+    period: str = "6mo",
+    interval: str = "1d",
+    windows: tuple[int, ...] = DEFAULT_WINDOWS,
+    min_score: int = 60,
+) -> pd.DataFrame:
+    """유니버스를 일괄 스캔해 매매 점수가 높은 상위 종목을 추천 표로 반환한다.
+
+    각 종목의 0~100 매매 점수(``signals.trade_score``)를 계산하고,
+    ``min_score`` 이상만 남겨 점수 내림차순으로 상위 ``top_n`` 개를 뽑는다.
+
+    Parameters
+    ----------
+    universe : ``{야후심볼: 표시명}`` (예: :data:`universe.KR_UNIVERSE`).
+    top_n : 상위 몇 개를 반환할지.
+    fetch : ``fetch(ticker, period, interval) -> DataFrame`` 조회 함수.
+        None이면 라이브 경로 ``data.fetch_ohlcv``.  # 사용자 PC에서 검증 필요
+        테스트/데모는 sample_data 기반 주입 fetch로 네트워크 없이 검증.
+    min_score : 이 점수 미만은 '매수 신호 약함'으로 보고 제외(기본 60=매수 이상).
+
+    Returns
+    -------
+    pd.DataFrame
+        ``RECOMMEND_COLUMNS`` 스키마, 매매점수 내림차순. 조건 통과가 없으면 빈 표.
+        각 종목의 조회/계산 예외는 격리되어 해당 종목만 건너뛴다.
+
+    ⚠️ 종목 자체를 보증하지 않으며, 기술적 점수 순 정렬일 뿐 매매 지시가 아니다.
+    """
+    fetcher = fetch if fetch is not None else fetch_ohlcv  # 사용자 PC에서 검증 필요
+
+    rows: list[dict] = []
+    for symbol, name in universe.items():
+        try:
+            ticker = normalize_ticker(str(symbol))
+            df = fetcher(ticker, period, interval)
+            if df is None or len(df) < 2:
+                continue
+            ts = signals.trade_score(df)
+            if ts.score < min_score:
+                continue
+            trend = classify_trend(df, windows=windows)
+            rsi_val = _latest_valid(indicators.rsi(df["Close"].astype("float64"), 14))
+            rows.append(
+                {
+                    "종목": name,
+                    "티커": ticker,
+                    "매매점수": int(ts.score),
+                    "판단": ts.label,
+                    "추세": trend.label,
+                    "RSI": round(float(rsi_val), 1) if not np.isnan(rsi_val) else float("nan"),
+                }
+            )
+        except Exception:  # noqa: BLE001 - 개별 종목 실패는 격리하고 계속
+            continue
+
+    result = pd.DataFrame(rows, columns=list(RECOMMEND_COLUMNS))
+    if not result.empty:
+        result = result.sort_values("매매점수", ascending=False, kind="mergesort")
+    return result.reset_index(drop=True).head(top_n)
