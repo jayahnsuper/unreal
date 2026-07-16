@@ -131,9 +131,21 @@ def test_trend_sideways_detected():
 
 
 def test_trend_insufficient_data():
+    # 8봉 미만은 정말로 데이터 부족
     df = _ohlcv_from_close([100, 101, 102])
     result = classify_trend(df)
     assert result.label == "데이터 부족"
+
+
+def test_trend_short_data_uses_shortened_windows():
+    # 표준 이평(20/60/120)은 못 들어가지만 8봉 이상이면 축소 이평으로 판정한다
+    close = list(np.linspace(100, 140, 25))  # 25봉 꾸준한 상승
+    df = _ohlcv_from_close(close)
+    result = classify_trend(df)
+    assert result.label != "데이터 부족"
+    assert len(result.windows) == 2  # 축소된 (short, long)
+    # 축소 판정 안내 문구가 포함된다
+    assert any("축소 이평" in r for r in result.reasons)
 
 
 # --------------------------- Crosses -----------------------------------
@@ -155,6 +167,30 @@ def test_signals_report_structure():
     table = signals.signals_dataframe(report)
     assert list(table.columns) == ["규칙", "판정", "근거"]
     assert len(table) >= 4
+
+
+# --------------------------- Trade score -------------------------------
+def test_trade_score_bounds_and_labels():
+    up = _ohlcv_from_close(list(np.linspace(100, 220, 160)))
+    down = _ohlcv_from_close(list(np.linspace(220, 100, 160)))
+    ts_up = signals.trade_score(up)
+    ts_down = signals.trade_score(down)
+
+    # 0~100 범위
+    assert 0 <= ts_up.score <= 100
+    assert 0 <= ts_down.score <= 100
+    # 방향성: 상승장 점수 > 하락장 점수, 그리고 각각 매수/매도 쪽
+    assert ts_up.score > ts_down.score
+    assert ts_up.label in {"매수", "강한 매수"}
+    assert ts_down.label in {"매도", "강한 매도"}
+
+
+def test_trade_score_sideways_is_neutral():
+    rng = np.random.default_rng(7)
+    flat = _ohlcv_from_close(list(150 + rng.normal(scale=0.5, size=160)))
+    ts = signals.trade_score(flat)
+    assert 40 <= ts.score <= 60
+    assert ts.label == "중립"
 
 
 # --------------------------- Levels ------------------------------------
