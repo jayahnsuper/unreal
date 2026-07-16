@@ -15,7 +15,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
-from src import alerts, backtest, indicators, levels, signals
+from src import alerts, backtest, indicators, levels, screener, signals
 from src.data import VALID_INTERVALS, VALID_PERIODS, fetch_ohlcv, sample_data
 from src.trend import classify_trend, detect_crosses
 
@@ -358,6 +358,102 @@ def render_backtest(df: pd.DataFrame, cfg: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# 종목 스크리너
+# ---------------------------------------------------------------------------
+def parse_tickers(text: str) -> list[str]:
+    """텍스트 입력(콤마/줄바꿈 구분)을 티커 목록으로 파싱한다.
+
+    Streamlit 런타임 없이 테스트 가능한 순수 함수. 빈 항목/중복은 제거한다.
+    """
+    raw = text.replace("\n", ",").split(",")
+    out: list[str] = []
+    for tok in raw:
+        t = tok.strip()
+        if t and t not in out:
+            out.append(t)
+    return out
+
+
+def make_demo_fetch(days: int = 400):
+    """데모(오프라인) 모드용 주입 fetch를 만든다 (Streamlit 런타임 불필요, 테스트 가능).
+
+    티커 문자열을 시드로 변환해 종목마다 서로 다른 합성 시계열을 돌려준다.
+    **실제 시세가 아닌 합성 데이터**이므로 화면에는 경고 문구를 함께 표시한다.
+    """
+
+    def _fetch(ticker: str, period: str = "1y", interval: str = "1d") -> pd.DataFrame:
+        seed = abs(hash(ticker)) % 10_000  # 티커별 고정 시드
+        return sample_data(days=days, seed=seed)
+
+    return _fetch
+
+
+def render_screener(cfg: dict) -> None:
+    """스크리너 탭 UI — 티커 목록 입력 · 필터 · 실행 · 결과 표."""
+    st.subheader("🔎 종목 스크리너")
+    st.caption("여러 종목을 일괄 조회·평가해 추세/신호 기준으로 필터링·랭킹합니다.")
+
+    text = st.text_area(
+        "티커 목록 (콤마 또는 줄바꿈 구분)",
+        value="",
+        placeholder="AAPL, MSFT, 005930",
+        help="예) AAPL, MSFT, NVDA · 한국: 005930 또는 005930.KS, 코스닥 035720.KQ",
+    )
+
+    # --- 필터 위젯 ---
+    f1, f2 = st.columns(2)
+    with f1:
+        trend_up = st.checkbox("추세 상승만", value=False)
+        recent_golden = st.checkbox("최근 골든크로스", value=False)
+    with f2:
+        rsi_range = st.slider("RSI 범위", 0, 100, (0, 100))
+        use_above_sma = st.checkbox("종가가 SMA20 위", value=False)
+
+    criteria: dict = {}
+    if trend_up:
+        criteria["trend_up"] = True
+    if recent_golden:
+        criteria["recent_golden_cross"] = True
+    # RSI 범위가 기본(0~100)이 아닐 때만 조건으로 반영
+    if rsi_range[0] > 0:
+        criteria["rsi_min"] = float(rsi_range[0])
+    if rsi_range[1] < 100:
+        criteria["rsi_max"] = float(rsi_range[1])
+    if use_above_sma:
+        criteria["above_sma"] = 20
+
+    if cfg["demo"]:
+        st.warning(
+            "🧪 **데모 모드** — 스크리너 결과는 티커별 합성 샘플 데이터 기반이며 실제 시세가 아닙니다."
+        )
+
+    if st.button("스크리닝 실행"):
+        tickers = parse_tickers(text)
+        if not tickers:
+            st.info("티커를 한 개 이상 입력하세요. (예: AAPL, MSFT, 005930)")
+            return
+
+        # 데모 모드면 오프라인 주입 fetch, 라이브 모드면 기본 fetch_ohlcv(fetch=None)
+        fetch = make_demo_fetch() if cfg["demo"] else None
+        with st.spinner(f"{len(tickers)}개 종목을 평가하는 중…"):
+            result = screener.screen(
+                tickers,
+                criteria=criteria or None,
+                fetch=fetch,
+                period=cfg["period"],
+                interval=cfg["interval"],
+                windows=cfg["windows"],
+            )
+
+        if result.empty:
+            st.info("조건을 통과한 종목이 없습니다. 필터를 완화하거나 티커를 확인하세요.")
+        else:
+            st.dataframe(result, use_container_width=True, hide_index=True)
+
+    st.caption("※ 스크리너 결과는 기술적 조건 기반 참고용이며 매매 지시가 아닙니다.")
+
+
+# ---------------------------------------------------------------------------
 # 메인
 # ---------------------------------------------------------------------------
 def main() -> None:
@@ -398,9 +494,9 @@ def main() -> None:
         render_chart(df, cfg)
         render_signal_table(df)
 
-    # --- 스크리너 탭: 향후 check_watchlist 기반 기능으로 채울 예정 ---
+    # --- 스크리너 탭: 여러 종목 일괄 조회·필터·랭킹 ---
     with tab_screener:
-        st.info("🛠️ 스크리너는 준비 중입니다. (워치리스트 일괄 알림 점검 예정)")
+        render_screener(cfg)
 
     # --- 백테스트 탭: 신호 기반 롱-온리 시뮬레이션 ---
     with tab_backtest:
